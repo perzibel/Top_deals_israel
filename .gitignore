@@ -1,0 +1,74 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Keep example env files
+!.env.example
+
+# IDE / Editor
+.idea/
+.vscode/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Databases / local data
+*.sqlite
+*.sqlite3
+*.db
+
+# Keep database examples/backups only if you intentionally want them tracked
+# !example.sqlite3
+
+# Local data / runtime folders
+data/
+sessions/
+tmp/
+temp/
+.cache/
+
+# Test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Secrets / credentials
+credentials.json
+token.json
+*.pem
+*.key
+*.crt
+
+# Local debug scripts/output
+debug_*.py
+*_queue.py
