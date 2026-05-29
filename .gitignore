@@ -71,4 +71,3 @@ token.json
 
 # Local debug scripts/output
 debug_*.py
-*_queue.py
