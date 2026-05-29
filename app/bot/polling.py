@@ -345,7 +345,6 @@ async def new_cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             ) from e
 
     related_list = []
-    print(len(response.body['aliexpress_affiliate_product_query_response']['resp_result']['result']['products']['product']))
     for i in response.body['aliexpress_affiliate_product_query_response']['resp_result']['result']['products']['product']:
         res = check_internal_related_with_ollama(keyword, i['first_level_category_name'], i['product_title'])
         if res['result'] != 'related':
