@@ -1,6 +1,9 @@
+import logging
 import json
 import asyncio
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 
 class SeedUrlsClient:
@@ -51,8 +54,8 @@ class SeedUrlsClient:
                 await asyncio.sleep(1.2)
 
             except Exception as e:
-                print(f"Failed to fetch product from AliExpress: {product_url}")
-                print(f"Error: {e}")
+                log.info(f"Failed to fetch product from AliExpress: {product_url}")
+                log.info(f"Error: {e}")
 
         if limit:
             products = products[:limit]

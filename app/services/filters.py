@@ -1,13 +1,23 @@
-def get_product_value(product, key: str, default=None):
-    if isinstance(product, dict):
-        return product.get(key, default)
+from app.services.scoring import listed_discount_percent
+from app.utils import get_product_value
 
-    return getattr(product, key, default)
+# Obvious parts/components that are not consumer-friendly deals.
+BLOCKED_TITLE_TERMS = [
+    "pcb",
+    "connector",
+    "plug socket",
+    "socket connector",
+    "2pin",
+    "4pin",
+    "pin header",
+    "male plug",
+    "female socket",
+    "repair part",
+    "replacement part",
+]
 
 
 def is_good_deal(product, settings):
-    product_id = get_product_value(product, "product_id", "unknown")
-
     rating = get_product_value(product, "rating")
     orders = get_product_value(product, "orders")
 
@@ -44,46 +54,36 @@ def is_good_deal(product, settings):
     if int(orders) < int(settings.min_orders):
         return False, f"orders {orders} below {settings.min_orders}"
 
-    # ILS price filters
+    # Price: ILS is the real price; USD only for legacy seed data without ILS.
     if price_ils is not None:
         price_ils = float(price_ils)
 
-        if hasattr(settings, "min_price_ils") and price_ils < float(settings.min_price_ils):
+        if price_ils < float(settings.min_price_ils):
             return False, f"price ₪{price_ils} below minimum ₪{settings.min_price_ils}"
 
-        if hasattr(settings, "max_price_ils") and price_ils > float(settings.max_price_ils):
+        if price_ils > float(settings.max_price_ils):
             return False, f"price ₪{price_ils} above maximum ₪{settings.max_price_ils}"
 
-    # USD fallback price filters
     elif price_usd is not None:
         price_usd = float(price_usd)
 
-        if hasattr(settings, "min_price_usd") and price_usd < float(settings.min_price_usd):
+        if price_usd < float(settings.min_price_usd):
             return False, f"price ${price_usd} below minimum ${settings.min_price_usd}"
 
-        if hasattr(settings, "max_price_usd") and price_usd > float(settings.max_price_usd):
+        if price_usd > float(settings.max_price_usd):
             return False, f"price ${price_usd} above maximum ${settings.max_price_usd}"
 
     else:
         return False, "missing price"
 
-    # Avoid obvious parts/components that are not consumer-friendly deals
-    blocked_title_terms = [
-        "pcb",
-        "connector",
-        "plug socket",
-        "socket connector",
-        "2pin",
-        "4pin",
-        "pin header",
-        "male plug",
-        "female socket",
-        "repair part",
-        "replacement part",
-    ]
+    min_discount = float(getattr(settings, "min_discount_percent", 0) or 0)
+    if min_discount > 0:
+        discount = listed_discount_percent(product) or 0
+        if discount < min_discount:
+            return False, f"discount {discount:.0f}% below {min_discount:.0f}%"
 
-    for term in blocked_title_terms:
-        if term in title:
-            return False, f"blocked component/repair term: {term}"
+    for term in BLOCKED_TITLE_TERMS + list(getattr(settings, "blocked_title_term_list", [])):
+        if term and term in title:
+            return False, f"blocked title term: {term}"
 
     return True, "ok"

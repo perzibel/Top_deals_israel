@@ -1,13 +1,15 @@
 import json
+import logging
 
 import httpx
 
+from app.utils import get_product_value
 
-def get_product_value(product, key: str, default=None):
-    if isinstance(product, dict):
-        return product.get(key, default)
+log = logging.getLogger(__name__)
 
-    return getattr(product, key, default)
+# Telegram limits: photo captions 1024 chars, text messages 4096.
+CAPTION_LIMIT = 1024
+MESSAGE_LIMIT = 4096
 
 
 class TelegramClient:
@@ -15,13 +17,17 @@ class TelegramClient:
         self.settings = settings
         self.base_url = f"https://api.telegram.org/bot{settings.telegram_bot_token}"
 
-    async def send_product(self, product, message: str):
+    async def send_product(self, product, message: str) -> None:
         deal_url = (
-            get_product_value(product, "affiliate_url")
-            or get_product_value(product, "product_url")
+                get_product_value(product, "affiliate_url")
+                or get_product_value(product, "product_url")
         )
 
         image_url = get_product_value(product, "image_url")
+
+        if self.settings.dry_run:
+            log.info("[DRY RUN] Would post to %s:\n%s\n%s", self.settings.telegram_channel_id, message, deal_url)
+            return
 
         reply_markup = {
             "inline_keyboard": [
@@ -35,7 +41,7 @@ class TelegramClient:
         }
 
         async with httpx.AsyncClient(timeout=30) as client:
-            if image_url:
+            if image_url and len(message) <= CAPTION_LIMIT:
                 photo_response = await client.post(
                     f"{self.base_url}/sendPhoto",
                     data={
@@ -47,66 +53,66 @@ class TelegramClient:
                     },
                 )
 
-                print("Telegram photo status:", photo_response.status_code)
-                print("Telegram photo response:", photo_response.text)
-
                 if photo_response.status_code == 200:
                     return
 
-                print("Photo failed. Falling back to text message...")
+                log.warning(
+                    "sendPhoto failed (%s): %s. Falling back to text message.",
+                    photo_response.status_code,
+                    photo_response.text[:500],
+                )
 
             text_response = await client.post(
                 f"{self.base_url}/sendMessage",
                 data={
                     "chat_id": self.settings.telegram_channel_id,
-                    "text": message,
+                    "text": message[:MESSAGE_LIMIT],
                     "parse_mode": "HTML",
                     "reply_markup": json.dumps(reply_markup),
                     "disable_web_page_preview": False,
                 },
             )
 
-        print("Telegram text status:", text_response.status_code)
-        print("Telegram text response:", text_response.text)
-        text_response.raise_for_status()
+        if text_response.status_code != 200:
+            raise RuntimeError(
+                f"Telegram sendMessage failed: {text_response.status_code} {text_response.text[:500]}"
+            )
 
-async def send_message(self, text: str) -> None:
-    """
-    Send a plain text message to the configured Telegram chat/channel.
-    Used for social draft previews.
-    """
-    import httpx
+    async def send_message(self, text: str, chat_id: str | None = None) -> None:
+        """
+        Send a plain text message to the private chat (TELEGRAM_CHAT_ID) by default.
+        Used for social draft previews and alerts.
+        """
+        chat_id = chat_id or self.settings.telegram_chat_id
 
-    bot_token = (
-        getattr(self.settings, "telegram_bot_token", None)
-        or getattr(self.settings, "TELEGRAM_BOT_TOKEN", None)
-        or getattr(self.settings, "telegram_token", None)
-    )
+        if not self.settings.telegram_bot_token:
+            raise RuntimeError("Missing Telegram bot token in settings")
 
-    chat_id = (
-        getattr(self.settings, "telegram_chat_id", None)
-        or getattr(self.settings, "TELEGRAM_CHAT_ID", None)
-        or getattr(self.settings, "telegram_approval_chat_id", None)
-    )
+        if not chat_id:
+            raise RuntimeError("Missing TELEGRAM_CHAT_ID in settings")
 
-    if not bot_token:
-        raise RuntimeError("Missing Telegram bot token in settings")
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.post(
+                f"{self.base_url}/sendMessage",
+                json={
+                    "chat_id": chat_id,
+                    "text": text[:MESSAGE_LIMIT],
+                    "disable_web_page_preview": False,
+                },
+            )
 
-    if not chat_id:
-        raise RuntimeError("Missing Telegram chat id in settings")
+        if response.status_code >= 400:
+            raise RuntimeError(
+                f"Telegram sendMessage failed: {response.status_code} {response.text[:500]}"
+            )
 
-    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+    async def send_alert(self, text: str) -> None:
+        """Best-effort operational alert to the private chat. Never raises."""
+        if not self.settings.telegram_chat_id:
+            log.warning("Alert not sent (TELEGRAM_CHAT_ID not set): %s", text)
+            return
 
-    payload = {
-        "chat_id": chat_id,
-        "text": text,
-        "disable_web_page_preview": False,
-    }
-
-    async with httpx.AsyncClient(timeout=30) as client:
-        response = await client.post(url, json=payload)
-
-    if response.status_code >= 400:
-        raise RuntimeError(
-            f"Telegram sendMessage failed: {response.status_code} {response.text}"
-        )
+        try:
+            await self.send_message(f"⚠️ Top Deals Israel\n{text}")
+        except Exception as e:
+            log.error("Failed to send alert: %s", e)

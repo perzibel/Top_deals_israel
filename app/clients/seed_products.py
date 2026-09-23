@@ -8,7 +8,7 @@ class SeedProductsClient:
     def __init__(self, path: str = "data/products_seed.json"):
         self.path = Path(path)
 
-    async def search_products(self, keyword: str):
+    async def search_products(self, keyword: str, **_ignored):
         if not self.path.exists():
             return []
 

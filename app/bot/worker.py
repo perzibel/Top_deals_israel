@@ -9,7 +9,7 @@ from app.bot.queue import get_next_request, mark_done, mark_failed, init_queue_d
 from app.clients.aliexpress import AliExpressClient
 from app.clients.ollama import OllamaClient
 from app.config import Settings
-from app.services.engine import build_telegram_message, get_product_value, set_product_value
+from app.services.engine import build_telegram_message, get_product_value
 from app.services.manual_product_analyzer import ManualProductAnalyzer
 
 

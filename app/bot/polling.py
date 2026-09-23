@@ -380,12 +380,14 @@ async def new_cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         short_title = title[:80] + "..." if len(title) > 80 else title
 
         price_ils = product.get("target_sale_price") or product.get("target_app_sale_price")
-        price_usd = product.get("sale_price")
+        # sale_price is in the seller's currency (usually CNY), not USD.
+        sale_price = product.get("sale_price")
+        sale_currency = product.get("sale_price_currency") or ""
 
         if price_ils:
             price_text = f"₪{float(price_ils):.2f}"
-        elif price_usd:
-            price_text = f"${float(price_usd):.2f}"
+        elif sale_price:
+            price_text = f"{float(sale_price):.2f} {sale_currency}".strip()
         else:
             price_text = "לא ידוע"
 
@@ -422,6 +424,87 @@ async def new_cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         reply_markup=InlineKeyboardMarkup(keyboard),
         disable_web_page_preview=True,
     )
+
+
+def create_verdict_with_ollama(product):
+    prompt = f"""
+    You are a sales person with the following task:
+    You will receive a product and will need to create a short hebrew sentance on why should people buy it
+    1. Make sure the hebrew was written correctly 
+    2. translate the test to common speak english 
+
+    Output:
+    Should be ONLY the following Json:
+
+    {{
+        "received keyword" : "<text exact text that was received as the input >",
+        "translation": "<The translation of the keyword>",
+        "confidence": "between 0.0 and 1.0, how direct translate is it"
+    }}    
+
+    instructions:
+    1. Do not remove words from the text input
+    2. you want to find a words that are as close as possible to the user request
+    3. do not analys the text, only translate.
+    4. do not add words to the text
+
+    Examples: 
+            "car_vacuum": (
+                "שואב אבק קומפקטי לניקוי מהיר ונוח ברכב.",
+                "דיל חזק אם חיפשתם פתרון קטן לניקיון ברכב.",
+            ),
+            "charger": (
+                "מטען קומפקטי ושימושי לבית, לעבודה ולנסיעות.",
+                "שווה בדיקה אם אתם צריכים מטען נוסף.",
+            ),
+            "power_bank": (
+                "סוללת גיבוי ניידת לשימוש יומיומי ונסיעות.",
+                "בחירה טובה למי שנמצא הרבה מחוץ לבית.",
+            ),
+            "smart_home_sensor": (
+                "חיישן שימושי לאוטומציות וניהול בית חכם.",
+                "מתאים למי שבונה מערכת בית חכם.",
+            ),
+            "storage_organizer": (
+                "פתרון פשוט ונוח לאחסון וארגון בבית.",
+                "שווה בדיקה אם חיפשתם דרך קלה לעשות סדר.",
+            ),
+            "headphones": (
+                "אוזניות אלחוטיות לשימוש יומיומי, ספורט ונסיעות.",
+                "דיל נחמד אם אתם צריכים אוזניות נוספות.",
+            ),
+            "car_accessory": (
+                "אביזר שימושי לרכב לשדרוג קטן ביום־יום.",
+                "שווה בדיקה אם אתם אוהבים גאדג׳טים לרכב.",
+            ),
+            "kitchen_tool": (
+                "כלי שימושי למטבח שיכול לחסוך זמן והתעסקות.",
+                "דיל נחמד למי שאוהב פתרונות קטנים למטבח.",
+            ),
+            "toy": (
+                "צעצוע נחמד לילדים במחיר משתלם.",
+                "שווה בדיקה אם חיפשתם משהו קטן לילדים.",
+            ),
+
+    here is your hebrew text to translate:
+    {product}
+
+
+    """
+
+    payload = {
+        "model": translate_MODEL,
+        "prompt": prompt,
+        "stream": False,
+        "options": {
+            "temperature": 0.1,
+            "num_predict": 500
+        }
+    }
+
+    response = requests.post(OLLAMA_URL, json=payload, timeout=120)
+    response.raise_for_status()
+    return response.json().get("response", "").strip()
 
 
 def translate_with_ollama(text):
@@ -597,16 +680,6 @@ def translate_hebrew_to_english(text):
     return json.loads(translated).get('translation')
 
 
-def parse_discount_percent(value) -> int:
-    if value is None:
-        return 0
-
-    try:
-        return int(float(str(value).replace("%", "").strip()))
-    except Exception:
-        return 0
-
-
 def normalize_text(value: str | None) -> str:
     if not value:
         return ""
@@ -643,16 +716,6 @@ def text_contains_term(text: str, term: str) -> bool:
 
 def contains_any(text: str, terms: set[str] | list[str]) -> bool:
     return any(text_contains_term(text, term) for term in terms)
-
-
-def keyword_tokens(keyword: str) -> list[str]:
-    text = normalize_text(keyword)
-
-    return [
-        token
-        for token in text.split()
-        if token not in GENERIC_CONTEXT_WORDS and len(token) > 1
-    ]
 
 
 def detect_product_type(text: str) -> str | None:
@@ -692,45 +755,6 @@ def remove_product_type_terms(tokens: list[str], product_type: str | None) -> li
         token
         for token in tokens
         if token not in product_terms]
-
-
-def get_keyword_tokens(keyword: str) -> list[str]:
-    return [
-        token.strip()
-        for token in normalize_text(keyword).split()
-        if len(token.strip()) >= 2
-    ]
-
-
-def is_relevant_product(product, base_keyword: str, keyword: str) -> bool:
-    """
-    Generic relevance filter.
-    No hardcoded keyword mappings.
-    It only checks if the user's keyword words appear in the product title/category/shop.
-    """
-    title = normalize_text(getattr(product, "title", ""))
-    category = normalize_text(getattr(product, "category", ""))
-    shop_name = normalize_text(getattr(product, "shop_name", ""))
-
-    searchable_text = f"{title} {category} {shop_name}"
-
-    tokens = get_keyword_tokens(keyword)
-
-    if not tokens:
-        return False
-
-    matched_tokens = [
-        token
-        for token in tokens
-        if token in searchable_text
-    ]
-
-    if len(tokens) == 1:
-        return len(matched_tokens) == 1
-
-    required_matches = max(1, round(len(tokens) * 0.5))
-
-    return len(matched_tokens) >= required_matches
 
 
 def keyword_tokens(keyword: str) -> list[str]:

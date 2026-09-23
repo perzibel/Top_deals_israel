@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -6,16 +7,12 @@ from app.services.social_post_generator import generate_social_post
 from app.services.social_media_picker import choose_media_type
 
 from app.services.hot_product_filters import is_target_hot_product
+from app.utils import get_product_value
+
+log = logging.getLogger(__name__)
 
 
 ISRAEL_TZ = ZoneInfo("Asia/Jerusalem")
-
-
-def get_product_value(product, key: str, default=None):
-    if isinstance(product, dict):
-        return product.get(key, default)
-
-    return getattr(product, key, default)
 
 
 def product_identity(product) -> str:
@@ -77,7 +74,7 @@ async def build_nightly_social_posts(
             max_sale_price=250,
         )
 
-        print(f"[SOCIAL DEBUG] keyword={keyword} products={len(products)}")
+        log.info(f"[SOCIAL DEBUG] keyword={keyword} products={len(products)}")
         all_products.extend(products)
 
     candidates = []
@@ -89,13 +86,13 @@ async def build_nightly_social_posts(
         )
 
         if not is_allowed:
-            print(f"[SOCIAL DEBUG] skipped by filter: {filter_reason}")
+            log.info(f"[SOCIAL DEBUG] skipped by filter: {filter_reason}")
             continue
 
         actual_media = choose_media_type(product, "either")
 
         if actual_media == "missing":
-            print("[SOCIAL DEBUG] skipped: missing media")
+            log.info("[SOCIAL DEBUG] skipped: missing media")
             continue
 
         try:
@@ -105,7 +102,7 @@ async def build_nightly_social_posts(
                 media_type=actual_media,
             )
         except Exception as e:
-            print(
+            log.info(
                 f"[SOCIAL DEBUG] generation failed for "
                 f"product_id={product_identity(product)}: {type(e).__name__}: {e}"
             )
@@ -114,7 +111,7 @@ async def build_nightly_social_posts(
         score = float(draft.get("score", 0) or 0)
         should_publish = bool(draft.get("should_publish"))
 
-        print(
+        log.info(
             f"[SOCIAL DEBUG] product_id={draft.get('product_id')} "
             f"score={score} "
             f"should_publish={should_publish} "
@@ -129,7 +126,7 @@ async def build_nightly_social_posts(
             candidates.append(draft)
 
         if len(candidates) >= 12:
-            print("[SOCIAL DEBUG] enough candidates collected, stopping AI calls")
+            log.info("[SOCIAL DEBUG] enough candidates collected, stopping AI calls")
             break
 
     # Sort by score, highest first.
@@ -175,9 +172,9 @@ async def build_nightly_social_posts(
         selected.append(candidate)
         used_products.add(product_id)
 
-    print(f"[SOCIAL DEBUG] total_products={len(all_products)}")
-    print(f"[SOCIAL DEBUG] candidates_after_ai={len(candidates)}")
-    print(f"[SOCIAL DEBUG] selected_count={len(selected)}")
+    log.info(f"[SOCIAL DEBUG] total_products={len(all_products)}")
+    log.info(f"[SOCIAL DEBUG] candidates_after_ai={len(candidates)}")
+    log.info(f"[SOCIAL DEBUG] selected_count={len(selected)}")
 
     tomorrow = datetime.now(ISRAEL_TZ).date() + timedelta(days=1)
     schedule_times = ["10:30", "15:00", "20:30"]
@@ -202,9 +199,9 @@ async def build_nightly_social_posts(
             raw=draft,
         )
 
-    print(f"[SOCIAL DEBUG] total_products={len(all_products)}")
-    print(f"[SOCIAL DEBUG] candidates_after_ai={len(candidates)}")
-    print(f"[SOCIAL DEBUG] selected_count={len(selected)}")
+    log.info(f"[SOCIAL DEBUG] total_products={len(all_products)}")
+    log.info(f"[SOCIAL DEBUG] candidates_after_ai={len(candidates)}")
+    log.info(f"[SOCIAL DEBUG] selected_count={len(selected)}")
 
     if telegram_client:
         for draft in selected[:posts_per_day]:

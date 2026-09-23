@@ -1,20 +1,12 @@
-import sqlite3
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Optional
 
 
-DB_PATH = Path("deal_engine.sqlite3")
+from app.storage.paths import get_conn
 
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-
-def get_conn():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
 
 
 def init_affiliate_cache() -> None:

@@ -1,6 +1,6 @@
-import sqlite3
+from app.storage.paths import get_conn
 
-conn = sqlite3.connect("deal_engine.sqlite3")
+conn = get_conn()
 
 conn.execute("""
 UPDATE product_queue

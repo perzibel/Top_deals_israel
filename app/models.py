@@ -8,13 +8,15 @@ class Product:
     title: str
     product_url: str
 
+    # USD values are derived from the ILS prices (settings.usd_to_ils).
+    # The AliExpress API's own sale_price/original_price are in CNY, not USD.
     price_usd: Optional[float] = None
     original_price_usd: Optional[float] = None
 
     price_ils: Optional[float] = None
     original_price_ils: Optional[float] = None
 
-    currency: str = "USD"
+    currency: str = "ILS"
     rating: Optional[float] = None
     orders: Optional[int] = None
     shipping: Optional[str] = None
@@ -25,4 +27,14 @@ class Product:
 
     discount: Optional[str] = None
     shop_name: Optional[str] = None
+    shop_id: Optional[str] = None
     commission_rate: Optional[str] = None
+    video_url: Optional[str] = None
+
+    # Coupon attached to the product by the affiliate API, if any.
+    promo_code: Optional[str] = None
+    promo_code_value: Optional[str] = None
+    promo_code_min_spend: Optional[str] = None
+
+    # Discovery source, e.g. "search", "hot_products", "promo:<name>".
+    source: Optional[str] = None

@@ -1,20 +1,11 @@
-import sqlite3
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Optional
 
-
-DB_PATH = Path("deal_engine.sqlite3")
+from app.storage.paths import get_conn
 
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-
-def get_conn():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
 
 
 def init_queue_db() -> None:
@@ -38,6 +29,17 @@ def init_queue_db() -> None:
             )
             """
         )
+
+        # Older DBs created this table with a different column set.
+        existing = {row["name"] for row in conn.execute("PRAGMA table_info(user_requests)")}
+        for column, ddl in [
+            ("result_score", "INTEGER"),
+            ("finished_at", "TEXT"),
+            ("error", "TEXT"),
+            ("started_at", "TEXT"),
+        ]:
+            if column not in existing:
+                conn.execute(f"ALTER TABLE user_requests ADD COLUMN {column} {ddl}")
 
         conn.execute(
             """

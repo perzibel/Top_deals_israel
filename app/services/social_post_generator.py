@@ -6,9 +6,6 @@ from app.services.social_media_picker import get_value, pick_best_image, pick_be
 
 
 def safe_json_loads(text: str) -> dict:
-    import json
-    import re
-
     if not text or not text.strip():
         raise ValueError("Model returned empty text")
 

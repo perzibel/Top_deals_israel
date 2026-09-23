@@ -1,40 +1,13 @@
 from __future__ import annotations
 import asyncio
-from dataclasses import asdict, is_dataclass
 from typing import Any
 
 from app.services.filters import is_good_deal
 from app.services.engine import keyword_to_category
 from app.storage.product_queue import was_queued
 from app.storage.db import was_posted
-
-
-def normalize_text(value: str) -> str:
-    return str(value or "").lower().replace("-", " ").replace("_", " ")
-
-
-def get_product_value(product: Any, key: str, default=None):
-    if isinstance(product, dict):
-        return product.get(key, default)
-
-    return getattr(product, key, default)
-
-
-def set_product_value(product: Any, key: str, value: Any):
-    if isinstance(product, dict):
-        product[key] = value
-    else:
-        setattr(product, key, value)
-
-
-def product_to_dict(product: Any) -> dict:
-    if isinstance(product, dict):
-        return product
-
-    if is_dataclass(product):
-        return asdict(product)
-
-    return dict(product.__dict__)
+from app.services.engine import product_to_dict
+from app.utils import get_product_value
 
 
 def normalize_text(value: str) -> str:

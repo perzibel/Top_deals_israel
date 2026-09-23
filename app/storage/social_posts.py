@@ -1,16 +1,12 @@
-import sqlite3
 import json
-from datetime import datetime
-from pathlib import Path
+from datetime import datetime, timezone
 from typing import Optional
 
-DB_PATH = Path("data/app.db")
+from app.storage.paths import get_conn
 
 
 def init_social_posts() -> None:
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-
-    with sqlite3.connect(DB_PATH) as conn:
+    with get_conn() as conn:
         conn.execute("""
         CREATE TABLE IF NOT EXISTS social_posts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -57,7 +53,7 @@ def save_social_post(
     scheduled_for: Optional[str],
     raw: dict,
 ) -> None:
-    with sqlite3.connect(DB_PATH) as conn:
+    with get_conn() as conn:
         conn.execute(
             """
             INSERT OR IGNORE INTO social_posts (
@@ -93,7 +89,7 @@ def save_social_post(
                 video_url,
                 caption_he,
                 model_reason,
-                datetime.utcnow().isoformat(),
+                datetime.now(timezone.utc).isoformat(),
                 scheduled_for,
                 json.dumps(raw, ensure_ascii=False),
             ),

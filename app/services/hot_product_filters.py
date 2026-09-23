@@ -1,4 +1,5 @@
 from typing import Any
+from app.utils import get_product_value
 
 
 DEFAULT_ALLOWED_KEYWORDS = [
@@ -71,20 +72,14 @@ BLOCKED_KEYWORDS = [
 ]
 
 
-def get_product_value(product: Any, key: str, default=None):
-    if isinstance(product, dict):
-        return product.get(key, default)
-
-    return getattr(product, key, default)
-
-
 def parse_price_ils(product: Any) -> float | None:
+    # Product dataclass exposes price_ils; raw API dicts expose target_* (ILS).
+    # sale_price/original_price are CNY and must not be read as ILS.
     price_keys = [
+        "price_ils",
         "target_sale_price",
-        "sale_price",
-        "app_sale_price",
+        "target_app_sale_price",
         "target_original_price",
-        "original_price",
     ]
 
     for key in price_keys:

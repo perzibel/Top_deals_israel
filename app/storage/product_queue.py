@@ -1,20 +1,19 @@
 import json
+import logging
 import sqlite3
-from datetime import datetime, timezone
-from pathlib import Path
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-DB_PATH = Path("deal_engine.sqlite3")
+from app.storage.paths import get_conn
+
+log = logging.getLogger(__name__)
+
+# Keeps one popular keyword from filling the whole queue.
+MAX_QUEUED_PER_CATEGORY = 5
 
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-
-def get_conn():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
 
 
 def _column_exists(conn, table_name: str, column_name: str) -> bool:
@@ -80,7 +79,6 @@ def queue_size() -> int:
             WHERE status = 'queued'
             """
         ).fetchone()
-    print(int(row["count"]))
 
     return int(row["count"])
 
@@ -103,6 +101,7 @@ def queued_count_for_category(source_category: str) -> int:
 
 
 def was_queued(product_id: str) -> bool:
+    """True if the product is currently waiting in the queue."""
     init_product_queue()
 
     with get_conn() as conn:
@@ -111,6 +110,7 @@ def was_queued(product_id: str) -> bool:
             SELECT id
             FROM product_queue
             WHERE product_id = ?
+              AND status = 'queued'
             """,
             (product_id,),
         ).fetchone()
@@ -134,15 +134,15 @@ def enqueue_product(
     """
     init_product_queue()
 
-    MAX_QUEUED_PER_CATEGORY = 5
-
     if source_category and queued_count_for_category(source_category) >= MAX_QUEUED_PER_CATEGORY:
-        print(f"Skipping {product_id}: too many queued products in category {source_category}")
+        log.debug("Skipping %s: too many queued products in category %s", product_id, source_category)
         return False
 
     try:
         with get_conn() as conn:
-            conn.execute(
+            # A product that was posted or skipped before can come back (e.g. a
+            # repost after a price drop); only a row that is still queued blocks it.
+            cursor = conn.execute(
                 """
                 INSERT INTO product_queue (
                     product_id,
@@ -158,6 +158,19 @@ def enqueue_product(
                     created_at
                 )
                 VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)
+                ON CONFLICT(product_id) DO UPDATE SET
+                    product_url = excluded.product_url,
+                    affiliate_url = excluded.affiliate_url,
+                    title = excluded.title,
+                    score = excluded.score,
+                    status = 'queued',
+                    source_keyword = excluded.source_keyword,
+                    source_category = excluded.source_category,
+                    product_json = excluded.product_json,
+                    enrichment_json = excluded.enrichment_json,
+                    created_at = excluded.created_at,
+                    skipped_reason = NULL
+                WHERE product_queue.status != 'queued'
                 """,
                 (
                     product_id,
@@ -173,10 +186,74 @@ def enqueue_product(
                 ),
             )
 
-        return True
+        return cursor.rowcount > 0
 
     except sqlite3.IntegrityError:
         return False
+
+
+def last_post_time() -> Optional[datetime]:
+    init_product_queue()
+
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT MAX(posted_at) AS last FROM product_queue WHERE status = 'posted'"
+        ).fetchone()
+
+    return datetime.fromisoformat(row["last"]) if row and row["last"] else None
+
+
+def get_queue_row(product_id: str) -> Optional[dict]:
+    init_product_queue()
+
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM product_queue WHERE product_id = ?",
+            (str(product_id),),
+        ).fetchone()
+
+    return dict(row) if row else None
+
+
+def expire_stale_queued(max_age_days: int) -> int:
+    """Skip queued products older than max_age_days. Returns how many were expired."""
+    init_product_queue()
+
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=max_age_days)).isoformat()
+
+    with get_conn() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE product_queue
+            SET status = 'skipped',
+                skipped_reason = ?
+            WHERE status = 'queued'
+              AND created_at < ?
+            """,
+            (f"expired: queued more than {max_age_days} days", cutoff),
+        )
+
+    return cursor.rowcount
+
+
+def update_queued_product(queue_id: int, product_data: dict, enrichment_data: dict, score: int) -> None:
+    """Refresh a queued row with re-fetched product data before posting."""
+    with get_conn() as conn:
+        conn.execute(
+            """
+            UPDATE product_queue
+            SET product_json = ?,
+                enrichment_json = ?,
+                score = ?
+            WHERE id = ?
+            """,
+            (
+                json.dumps(product_data, ensure_ascii=False),
+                json.dumps(enrichment_data, ensure_ascii=False),
+                int(score),
+                queue_id,
+            ),
+        )
 
 
 def select_best_diverse_product(
@@ -326,6 +403,7 @@ def get_recent_posted_categories(limit: int = 3) -> list[str]:
 def get_next_queued_product(
     rotation_window: int = 5,
     excluded_categories: set[str] | None = None,
+    excluded_ids: set[int] | None = None,
 ) -> Optional[dict]:
     init_product_queue()
 
@@ -337,10 +415,13 @@ def get_next_queued_product(
             SELECT *
             FROM product_queue
             WHERE status = 'queued'
-            ORDER BY score DESC, created_at ASC
+            ORDER BY score DESC, created_at DESC
             LIMIT 200
             """
         ).fetchall()
+
+    if excluded_ids:
+        rows = [row for row in rows if row["id"] not in excluded_ids]
 
     selected = select_best_diverse_product(
         rows=rows,
