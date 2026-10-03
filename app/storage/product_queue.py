@@ -100,6 +100,64 @@ def queued_count_for_category(source_category: str) -> int:
     return int(row["count"])
 
 
+def queued_count_for_keyword(source_keyword: str) -> int:
+    init_product_queue()
+
+    with get_conn() as conn:
+        row = conn.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM product_queue
+            WHERE status = 'queued'
+              AND source_keyword = ?
+            """,
+            (source_keyword,),
+        ).fetchone()
+
+    return int(row["count"])
+
+
+def recent_posted_keywords(days: float) -> set[str]:
+    """Source keywords of products posted within the last `days` days."""
+    init_product_queue()
+
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT DISTINCT source_keyword
+            FROM product_queue
+            WHERE status = 'posted'
+              AND posted_at >= ?
+              AND source_keyword IS NOT NULL
+            """,
+            (cutoff,),
+        ).fetchall()
+
+    return {row["source_keyword"] for row in rows}
+
+
+def recent_titles(days: float) -> list[str]:
+    """Titles currently queued or posted within the last `days` days."""
+    init_product_queue()
+
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT title
+            FROM product_queue
+            WHERE status = 'queued'
+               OR (status = 'posted' AND posted_at >= ?)
+            """,
+            (cutoff,),
+        ).fetchall()
+
+    return [row["title"] for row in rows]
+
+
 def was_queued(product_id: str) -> bool:
     """True if the product is currently waiting in the queue."""
     init_product_queue()
@@ -261,11 +319,19 @@ def select_best_diverse_product(
     recent_categories: list[str],
     rotation_window: int = 5,
     excluded_categories: set[str] | None = None,
+    recent_keywords: set[str] | None = None,
 ) -> Optional[sqlite3.Row]:
     excluded_categories = excluded_categories or set()
 
     if not rows:
         return None
+
+    # Prefer keywords that weren't posted lately, so one search term doesn't
+    # dominate the channel; fall back to everything if that empties the pool.
+    if recent_keywords:
+        fresh_keyword_rows = [row for row in rows if row["source_keyword"] not in recent_keywords]
+        if fresh_keyword_rows:
+            rows = fresh_keyword_rows
 
     recent_set = set(recent_categories[:rotation_window])
     last_category = recent_categories[0] if recent_categories else None
@@ -404,6 +470,7 @@ def get_next_queued_product(
     rotation_window: int = 5,
     excluded_categories: set[str] | None = None,
     excluded_ids: set[int] | None = None,
+    excluded_keywords: set[str] | None = None,
 ) -> Optional[dict]:
     init_product_queue()
 
@@ -428,6 +495,7 @@ def get_next_queued_product(
         recent_categories=recent_categories,
         rotation_window=rotation_window,
         excluded_categories=excluded_categories,
+        recent_keywords=excluded_keywords,
     )
 
     return dict(selected) if selected else None

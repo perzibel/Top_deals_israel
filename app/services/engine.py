@@ -13,7 +13,8 @@ from app.clients.seed_products import SeedProductsClient
 from app.clients.seed_urls import SeedUrlsClient
 from app.clients.telegram import TelegramClient
 from app.config import Settings
-from app.services.filters import is_good_deal
+from app.services.discovery_pool import GADGET_WOW, KEYWORD_CATEGORY, keyword_wow, sample_keywords
+from app.services.filters import find_duplicate_title, is_good_deal, is_hidden_gem
 from app.storage.db import last_posted_at, mark_posted, was_posted
 from app.storage.price_history import record_price
 from app.storage.product_queue import (
@@ -28,6 +29,9 @@ from app.storage.product_queue import (
     MAX_QUEUED_PER_CATEGORY,
     queue_size,
     queued_count_for_category,
+    queued_count_for_keyword,
+    recent_posted_keywords,
+    recent_titles,
     update_queued_product,
     was_queued,
 )
@@ -36,6 +40,23 @@ from app.utils import get_product_value, set_product_value
 log = logging.getLogger(__name__)
 
 ISRAEL_TZ = ZoneInfo("Asia/Jerusalem")
+
+# Off-target results (per the model) after which a keyword's remaining results are skipped.
+MAX_KEYWORD_MISMATCHES = 3
+
+# AliExpress first-level category ID -> rotation category, for products found
+# through hot products / promo campaigns rather than a keyword search.
+ALI_CATEGORY_ID_TO_CATEGORY = {
+    "202192403": "phone_accessories",
+    "509": "phone_accessories",
+    "44": "electronics",
+    "7": "gaming_pc",
+    "34": "car",
+    "30": "smart_home",
+    "39": "smart_home",
+    "13": "smart_home",
+    "1420": "tools_diy",
+}
 
 
 def _discount_percent(price, original_price):
@@ -114,6 +135,16 @@ def _price_history_line(enrichment: dict) -> str | None:
     return None
 
 
+def _highlight_line(enrichment: dict) -> str | None:
+    if enrichment.get("hidden_gem"):
+        return "💎 <b>פנינה נסתרת</b> - דירוג מעולה ועוד לא כולם גילו"
+
+    if (enrichment.get("wow_score") or 0) >= GADGET_WOW:
+        return "🤯 <b>גאדג'ט מגניב</b>"
+
+    return None
+
+
 def _coupon_line(product) -> str | None:
     code = get_product_value(product, "promo_code")
     if not code:
@@ -165,9 +196,13 @@ def build_telegram_message(product, enrichment: dict, settings) -> str:
         f"⚡ {description}",
         "",
         score_line,
-        "",
-        price_line,
     ]
+
+    highlight_line = _highlight_line(enrichment)
+    if highlight_line:
+        lines.append(highlight_line)
+
+    lines.extend(["", price_line])
 
     history_line = _price_history_line(enrichment)
     if history_line:
@@ -281,8 +316,13 @@ def keyword_to_category(keyword: str, product=None) -> str:
         if any(term in keyword_lower for term in terms):
             return category
 
-    # Fallback to AliExpress category if available
+    # Fallback to AliExpress category if available. IDs first: the names are
+    # localized (Hebrew), which breaks category rotation.
     if product is not None:
+        category_id = str(get_product_value(product, "category_id") or "")
+        if category_id in ALI_CATEGORY_ID_TO_CATEGORY:
+            return ALI_CATEGORY_ID_TO_CATEGORY[category_id]
+
         ali_category = get_product_value(product, "category")
         if ali_category:
             return str(ali_category).strip().lower()
@@ -350,7 +390,14 @@ class DealEngine:
         if source in ["seed_urls", "seed"]:
             return ["seed_urls"]
 
-        sources = list(self.settings.keyword_list)
+        if self.settings.use_gadget_pool:
+            sources = sample_keywords(
+                self.settings.discovery_keywords_per_run,
+                self.settings.staple_keyword_share,
+                avoid=recent_posted_keywords(self.settings.keyword_cooldown_days),
+            )
+        else:
+            sources = list(self.settings.keyword_list)
 
         if self.settings.enable_hot_products:
             sources.extend(f"hot_topic_keyword:{kw}" for kw in self.settings.hot_topic_keyword_list)
@@ -437,6 +484,9 @@ class DealEngine:
             # Campaign names say nothing about the product; use its own category.
             return keyword_to_category("", product)
 
+        if token in KEYWORD_CATEGORY:
+            return KEYWORD_CATEGORY[token]
+
         return keyword_to_category(token, product)
 
     def _repost_allowed(self, product_id: str, price_ils) -> tuple[bool, str]:
@@ -485,6 +535,7 @@ class DealEngine:
 
         queued_count = 0
         checked_count = 0
+        known_titles = recent_titles(self.settings.duplicate_title_lookback_days)
 
         for token in await self._discovery_sources():
             if queued_count >= self.settings.discovery_max_candidates_per_run:
@@ -508,8 +559,18 @@ class DealEngine:
                 log.error("Search failed for %s: %s", token, e)
                 continue
 
+            mismatches = 0
+
             for product in products:
                 if queued_count >= self.settings.discovery_max_candidates_per_run:
+                    break
+
+                # A keyword whose results keep being something else isn't worth more model calls.
+                if mismatches >= MAX_KEYWORD_MISMATCHES:
+                    log.info("Giving up on %s after %d off-target results", token, mismatches)
+                    break
+
+                if queued_count_for_keyword(token) >= self.settings.max_queued_per_keyword:
                     break
 
                 checked_count += 1
@@ -550,8 +611,16 @@ class DealEngine:
                     log.debug("Skipping %s: category %s is full", product_id, source_category)
                     continue
 
+                duplicate_of = find_duplicate_title(
+                    str(title), known_titles, self.settings.duplicate_title_similarity,
+                )
+                if duplicate_of:
+                    log.debug("Skipping %s: looks like %r", product_id, duplicate_of[:60])
+                    continue
+
                 # Score first: it's deterministic and free, the model call is not.
-                result = self.ollama.score(product)
+                wow = keyword_wow(token)
+                result = self.ollama.score(product, wow=wow)
                 score = result.score
 
                 if score < self.settings.min_deal_score_to_post:
@@ -561,7 +630,20 @@ class DealEngine:
                     )
                     continue
 
-                enrichment = await self.ollama.enrich_product(product, result)
+                search_keyword = token if token in KEYWORD_CATEGORY else None
+                enrichment = await self.ollama.enrich_product(product, result, search_keyword=search_keyword)
+
+                # A "geiger counter" search also returns EMF meters and cases; only the real thing counts.
+                if enrichment.get("matches_search") is False:
+                    mismatches += 1
+                    log.info(
+                        "Skipping %s: not a %s (%s)",
+                        product_id, token, enrichment.get("what_it_is") or str(title)[:60],
+                    )
+                    continue
+
+                enrichment["wow_score"] = wow
+                enrichment["hidden_gem"] = is_hidden_gem(product, self.settings)
 
                 inserted = enqueue_product(
                     product_id=str(product_id),
@@ -577,9 +659,10 @@ class DealEngine:
 
                 if inserted:
                     queued_count += 1
+                    known_titles.append(str(title))
                     log.info(
-                        "Queued: %s score=%s source=%s category=%s",
-                        product_id, score, token, source_category,
+                        "Queued: %s score=%s wow=%s source=%s category=%s",
+                        product_id, score, wow, token, source_category,
                     )
 
         log.info(
@@ -614,7 +697,7 @@ class DealEngine:
         # endpoint sometimes leaves empty.
         for key in [
             "source", "promo_code", "promo_code_value", "promo_code_min_spend",
-            "rating", "orders", "image_url", "category",
+            "rating", "orders", "image_url", "category", "category_id", "sub_category_id",
         ]:
             if not get_product_value(fresh, key) and product_data.get(key):
                 set_product_value(fresh, key, product_data[key])
@@ -627,7 +710,7 @@ class DealEngine:
             log.info("Skipping queued %s at post time: %s", queue_row["product_id"], reason)
             return None
 
-        result = self.ollama.score(fresh)
+        result = self.ollama.score(fresh, wow=enrichment.get("wow_score"))
         score = result.score
 
         if score < self.settings.min_deal_score_to_post:
@@ -637,10 +720,11 @@ class DealEngine:
 
         # Numbers only: the queued copy text is reused below, so no model call here.
         fresh_enrichment = await self.ollama.enrich_product(fresh, result, use_model=False)
+        fresh_enrichment["hidden_gem"] = is_hidden_gem(fresh, self.settings)
 
         # Keep the queued copy text (it may be model-written); refresh the numbers.
-        for key in ["short_description", "tags"]:
-            if enrichment.get(key):
+        for key in ["short_description", "tags", "wow_score", "what_it_is", "matches_search"]:
+            if enrichment.get(key) is not None:
                 fresh_enrichment[key] = enrichment[key]
         if score >= 70 and enrichment.get("buy_verdict"):
             fresh_enrichment["buy_verdict"] = enrichment["buy_verdict"]
@@ -655,6 +739,7 @@ class DealEngine:
             excluded_categories: set[str] | None = None,
             dry_run: bool = False,
             excluded_ids: set[int] | None = None,
+            excluded_keywords: set[str] | None = None,
     ) -> dict | None:
         """
         Post the best queued product to Telegram.
@@ -665,6 +750,10 @@ class DealEngine:
         if not force and not is_active_posting_hour(self.settings):
             log.info("Outside active posting hours. Skipping post.")
             return None
+
+        excluded_keywords = (excluded_keywords or set()) | recent_posted_keywords(
+            self.settings.keyword_post_spacing_days
+        )
 
         log.info(
             "Category rotation window=%s | recent=%s",
@@ -680,6 +769,7 @@ class DealEngine:
                 rotation_window=self.settings.category_rotation_window,
                 excluded_categories=excluded_categories,
                 excluded_ids=excluded_ids,
+                excluded_keywords=excluded_keywords,
             )
 
             if not queue_row:
@@ -690,6 +780,7 @@ class DealEngine:
                     rotation_window=self.settings.category_rotation_window,
                     excluded_categories=excluded_categories,
                     excluded_ids=excluded_ids,
+                    excluded_keywords=excluded_keywords,
                 )
 
                 if not queue_row:
@@ -743,6 +834,7 @@ class DealEngine:
         failures = []
         selected_categories_this_batch: set[str] = set()
         selected_ids_this_batch: set[int] = set()
+        selected_keywords_this_batch: set[str] = set()
 
         for index in range(posts_per_batch):
             try:
@@ -751,6 +843,7 @@ class DealEngine:
                     excluded_categories=selected_categories_this_batch,
                     dry_run=dry_run,
                     excluded_ids=selected_ids_this_batch,
+                    excluded_keywords=selected_keywords_this_batch,
                 )
             except Exception as e:
                 # One bad product shouldn't cancel the rest of the batch.
@@ -762,6 +855,8 @@ class DealEngine:
                 break
 
             selected_ids_this_batch.add(queue_row["id"])
+            if queue_row.get("source_keyword"):
+                selected_keywords_this_batch.add(queue_row["source_keyword"])
             category = queue_row.get("source_category")
             if category:
                 selected_categories_this_batch.add(category)

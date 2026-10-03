@@ -95,13 +95,21 @@ def _price_points(price_ils) -> int:
     return 0
 
 
-def score_product(product: Any, history: Optional[PriceStats] = None) -> ScoreResult:
+def wow_points(wow: Optional[int]) -> int:
+    """Model-rated wow factor (1-10): a cool gadget gains up to 15, a dull one loses up to 12."""
+    if not wow:
+        return 0
+    return (max(1, min(10, int(wow))) - 5) * 3
+
+
+def score_product(product: Any, history: Optional[PriceStats] = None, wow: Optional[int] = None) -> ScoreResult:
     breakdown = {
         "base": 40,
         "rating": _rating_points(_value(product, "rating")),
         "orders": _orders_points(_value(product, "orders")),
         "price": _price_points(_value(product, "price_ils")),
         "coupon": 2 if _value(product, "promo_code") else 0,
+        "wow": wow_points(wow),
     }
 
     price = _value(product, "price_ils")

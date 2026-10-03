@@ -57,6 +57,9 @@ class Settings(BaseSettings):
     keywords: str = "smart home,usb c,keyboard,mouse,ssd,charger,power bank,earbuds"
     # Extra comma-separated title terms to reject, e.g. "shoes,insole,dress".
     blocked_title_terms: str = ""
+    # Only post products in these AliExpress categories. Comma separated; each entry is a
+    # first-level category ID ("44") or first:second level ("13:200321150"). Empty = no limit.
+    allowed_category_ids: str = ""
 
     telegram_api_id: int = 0
     telegram_api_hash: str = ""
@@ -87,6 +90,24 @@ class Settings(BaseSettings):
     discovery_max_candidates_per_run: int = 100
 
     category_rotation_window: int = 4
+
+    # Keyword discovery from app/services/discovery_pool.py (KEYWORDS is ignored when on).
+    use_gadget_pool: bool = True
+    discovery_keywords_per_run: int = 30
+    # Share of each run's keywords taken from everyday staples (chargers, earbuds...).
+    staple_keyword_share: float = 0.2
+    # A keyword that produced a post is not searched again for this many days.
+    keyword_cooldown_days: int = 7
+    # ...and the posting order avoids keywords posted within this many days.
+    keyword_post_spacing_days: int = 3
+    max_queued_per_keyword: int = 2
+    # Titles this similar (0-1 word overlap) to a recent post count as duplicates.
+    duplicate_title_similarity: float = 0.6
+    duplicate_title_lookback_days: int = 30
+
+    # Lesser-known products below min_orders are allowed if rated this well.
+    hidden_gem_min_orders: int = 100
+    hidden_gem_min_rating: float = 4.7
 
     # Result pages sampled per discovery source (random in [min, max]).
     discovery_page_min: int = 1
@@ -129,6 +150,18 @@ class Settings(BaseSettings):
     @property
     def blocked_title_term_list(self) -> list[str]:
         return [term.lower() for term in split_csv(self.blocked_title_terms)]
+
+    @property
+    def allowed_category_rules(self) -> tuple[set[str], set[tuple[str, str]]]:
+        """(allowed first-level IDs, allowed (first, second)-level pairs)."""
+        whole, pairs = set(), set()
+        for entry in split_csv(self.allowed_category_ids):
+            if ":" in entry:
+                first, second = (part.strip() for part in entry.split(":", 1))
+                pairs.add((first, second))
+            else:
+                whole.add(entry)
+        return whole, pairs
 
     @property
     def featured_promo_pattern_list(self) -> list[str]:

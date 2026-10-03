@@ -21,6 +21,9 @@ class Product:
     orders: Optional[int] = None
     shipping: Optional[str] = None
     category: Optional[str] = None
+    # AliExpress category IDs (language independent), used for interest filtering.
+    category_id: Optional[str] = None
+    sub_category_id: Optional[str] = None
 
     image_url: Optional[str] = None
     affiliate_url: Optional[str] = None

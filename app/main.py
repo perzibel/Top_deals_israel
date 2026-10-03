@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 import logging
+import sys
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -14,6 +15,7 @@ from app.config import Settings
 from app.logging_setup import setup_logging
 from app.services.engine import DealEngine
 from app.services.social_batch_builder import build_nightly_social_posts
+from app.storage.paths import LOG_DIR
 from app.storage.product_queue import (
     last_post_time,
     preview_candidate_ranking,
@@ -174,6 +176,32 @@ async def run_scheduler():
         await asyncio.sleep(60)
 
 
+def acquire_single_instance_lock():
+    """
+    Returns an open lock file handle, or None if another scheduler already runs.
+    Two scheduled tasks can launch the bot; only one may post. The OS releases
+    the lock when the process dies, however it dies.
+    """
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    handle = open(LOG_DIR / "scheduler.lock", "a+")
+
+    try:
+        if sys.platform == "win32":
+            import msvcrt
+
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        handle.close()
+        return None
+
+    return handle
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--once", action="store_true", help="Run discovery once")
@@ -205,6 +233,11 @@ def main():
     elif args.social_drafts:
         asyncio.run(create_social_drafts_once())
     else:
+        lock = acquire_single_instance_lock()
+        if lock is None:
+            log.info("Another scheduler instance is already running. Exiting.")
+            return
+
         try:
             asyncio.run(run_scheduler())
         except KeyboardInterrupt:

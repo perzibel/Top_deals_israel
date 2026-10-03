@@ -55,6 +55,7 @@ def test_message_omits_unknown_shipping(product, settings):
 def test_keyword_to_category():
     assert keyword_to_category("65w gan charger") == "phone_accessories"
     assert keyword_to_category("", {"category": "Shoes"}) == "shoes"
+    assert keyword_to_category("", {"category": "טלפון נייד", "category_id": "202192403"}) == "phone_accessories"
     assert keyword_to_category("") == "general"
 
 

@@ -523,6 +523,8 @@ class AliExpressClient:
                     product.get("second_level_category_name")
                     or product.get("first_level_category_name")
             ),
+            category_id=str(product.get("first_level_category_id") or "") or None,
+            sub_category_id=str(product.get("second_level_category_id") or "") or None,
 
             image_url=image_url,
             discount=product.get("discount"),

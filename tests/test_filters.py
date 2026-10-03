@@ -54,3 +54,26 @@ def test_works_with_queue_dicts(product, settings):
     from dataclasses import asdict
 
     assert is_good_deal(asdict(product), settings)[0]
+
+
+def test_allowed_categories(product, settings):
+    settings.allowed_category_ids = "44,13:200321150"
+
+    assert not is_good_deal(product, settings)[0]  # no category id at all
+    assert is_good_deal(replace(product, category_id="44"), settings)[0]
+    assert is_good_deal(replace(product, category_id="13", sub_category_id="200321150"), settings)[0]
+
+    allowed, reason = is_good_deal(replace(product, category_id="13", sub_category_id="200066144"), settings)
+    assert not allowed and "not in allowed" in reason
+    assert not is_good_deal(replace(product, category_id="322"), settings)[0]
+
+
+def test_hebrew_blocked_terms(product, settings):
+    settings.blocked_title_terms = "תינוק,חתול"
+    assert not is_good_deal(replace(product, title="מראה לרכב לתינוק"), settings)[0]
+
+
+def test_garbage_titles_rejected(product, settings):
+    junk = replace(product, title="Pujiamx aa/aaaaa/aaaa/aaaa/aaaa/aaaa/aaa/aaaa")
+    assert is_good_deal(junk, settings) == (False, "garbage title")
+    assert is_good_deal(replace(product, title="מטען 65W GaN מהיר USB-C/USB-A"), settings)[0]

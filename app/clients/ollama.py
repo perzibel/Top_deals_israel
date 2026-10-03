@@ -223,17 +223,18 @@ class OllamaClient:
         return await asyncio.to_thread(_call_ollama)
 
     @staticmethod
-    def score(product) -> ScoreResult:
+    def score(product, wow: int | None = None) -> ScoreResult:
         """Deterministic score; cheap, so callers check it before paying for the model."""
         product_id = get_product_value(product, "product_id")
         history = get_price_stats(str(product_id)) if product_id else None
-        return score_product(product, history)
+        return score_product(product, history, wow=wow)
 
     async def enrich_product(
             self,
             product,
             result: ScoreResult | None = None,
             use_model: bool = True,
+            search_keyword: str | None = None,
     ) -> dict[str, Any]:
         """
         Returns:
@@ -241,6 +242,9 @@ class OllamaClient:
         - short_description / buy_verdict: Hebrew copy (model output if usable, else templates)
         - tags: English hashtags
         - lowest_price_seen / real_drop_percent: price-history signals for the post
+        - what_it_is / matches_search: with a search_keyword, the model says whether the
+          product really is that thing and not a part, case or add-on for it
+          (None when the model wasn't asked or didn't answer)
         """
         result = result or self.score(product)
 
@@ -253,16 +257,24 @@ class OllamaClient:
             real_drop_percent=(
                 round(result.real_drop_percent) if result.real_drop_percent is not None else None
             ),
+            what_it_is=None,
+            matches_search=None,
         )
 
         if not use_model or not getattr(self.settings, "use_ollama", False):
             return enrichment
 
         try:
-            parsed = await self._ask_model(product)
+            parsed = await self._ask_model(product, search_keyword)
         except Exception as e:
             log.warning("Ollama enrichment failed, using templates: %s", e)
             return enrichment
+
+        if isinstance(parsed.get("what_it_is"), str):
+            enrichment["what_it_is"] = parsed["what_it_is"].strip()[:120]
+
+        if search_keyword and isinstance(parsed.get("matches_search"), bool):
+            enrichment["matches_search"] = parsed["matches_search"]
 
         tags = clean_tags(parsed.get("tags"))
         if tags:
@@ -280,13 +292,13 @@ class OllamaClient:
 
         return enrichment
 
-    async def _ask_model(self, product) -> dict[str, Any]:
+    async def _ask_model(self, product, search_keyword: str | None = None) -> dict[str, Any]:
         async with httpx.AsyncClient(timeout=90) as client:
             response = await client.post(
                 f"{self.base_url}/api/generate",
                 json={
                     "model": self.model,
-                    "prompt": self._build_prompt(product),
+                    "prompt": self._build_prompt(product, search_keyword),
                     "stream": False,
                     "format": "json",
                     # qwen3 is a reasoning model; without this it "thinks" before answering.
@@ -294,7 +306,7 @@ class OllamaClient:
                     "options": {
                         "temperature": 0.1,
                         "top_p": 0.8,
-                        "num_predict": 400,
+                        "num_predict": 600,
                     },
                 },
             )
@@ -302,7 +314,7 @@ class OllamaClient:
         response.raise_for_status()
         return self._parse_json(response.json().get("response", ""))
 
-    def _build_prompt(self, product) -> str:
+    def _build_prompt(self, product, search_keyword: str | None = None) -> str:
         price = get_product_value(product, "price_ils")
         original_price = get_product_value(product, "original_price_ils")
 
@@ -310,9 +322,18 @@ class OllamaClient:
         if price and original_price and original_price > price:
             discount_text = f"{round((original_price - price) / original_price * 100)}%"
 
+        if search_keyword:
+            match_field = f"""2. matches_search: true only if the product itself is a "{search_keyword}".
+   false if it is something else, or a part, case, cover, storage box, cable, charger,
+   mount, refill or other add-on for one."""
+            keys = "what_it_is, matches_search, short_description, tags, buy_verdict"
+        else:
+            match_field = ""
+            keys = "what_it_is, short_description, tags, buy_verdict"
+
         return f"""
-You are a deal analyst for an Israeli Telegram channel called Top Deals Israel.
-Analyze this AliExpress product and return ONLY a JSON object.
+You are the curator of Top Deals Israel, a Telegram channel of cool, surprising
+AliExpress gadgets for tech-savvy Israelis. Analyze this product and return ONLY a JSON object.
 
 Product:
 - Title: {get_product_value(product, "title")}
@@ -323,14 +344,15 @@ Product:
 - Rating: {get_product_value(product, "rating")}
 - Orders: {get_product_value(product, "orders")}
 
-Your job:
-1. short_description: what the product is and who it is for, in natural Hebrew. Max 18 words.
-2. tags: up to 5 English tags, no spaces, no # symbol.
-3. buy_verdict: a short buying recommendation in natural Hebrew. Max 18 words.
-4. Do not invent price, rating, orders, shipping, discount, or product features.
+Fields, in this order:
+1. what_it_is: in English, what the product actually is, in a few words.
+{match_field}
+3. short_description: in natural, playful Hebrew, what it does and what makes it cool. Max 18 words.
+4. tags: up to 5 English tags, no spaces, no # symbol.
+5. buy_verdict: a short, punchy buying recommendation in natural Hebrew. Max 18 words.
+Do not invent price, rating, orders, shipping, discount, or product features.
 
-Return exactly:
-{{"short_description": "...", "tags": ["Tag1", "Tag2"], "buy_verdict": "..."}}
+Return one JSON object with exactly these keys: {keys}
 """.strip()
 
     def _parse_json(self, text: str) -> dict[str, Any]:
