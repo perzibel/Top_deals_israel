@@ -47,6 +47,11 @@ GADGET_KEYWORDS: dict[str, list[str]] = {
         "car ambient light", "electric air duster", "dash cam 4k",
         "wireless backup camera", "jump starter power bank",
     ],
+    "toys_hobbies": [
+        "mini drone", "fpv drone", "rc drift car", "mini rc car", "rc boat", "rc helicopter",
+        "rc excavator", "fidget gadget", "desk toy", "puzzle box", "speed cube",
+        "stem robot kit", "building blocks technic", "solar robot kit",
+    ],
     "tools_diy": [
         "electric precision screwdriver", "mini electric screwdriver", "pinecil", "mini soldering iron",
         "cordless hot glue gun", "heat gun", "3d pen", "mini grinder", "laser distance meter",

@@ -56,6 +56,7 @@ ALI_CATEGORY_ID_TO_CATEGORY = {
     "39": "smart_home",
     "13": "smart_home",
     "1420": "tools_diy",
+    "26": "toys_hobbies",
 }
 
 
