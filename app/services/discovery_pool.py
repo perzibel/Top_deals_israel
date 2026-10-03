@@ -42,10 +42,10 @@ GADGET_KEYWORDS: dict[str, list[str]] = {
         "fingerprint door lock", "video doorbell", "smart garage door",
     ],
     "car": [
-        "car hud", "head up display", "wireless carplay adapter", "carplay ai box",
+        "car hud", "wireless carplay adapter", "carplay ai box",
         "tire pressure monitor", "obd2 scanner", "car door projector light", "car star roof light",
-        "car ambient light", "electric air duster", "mini car vacuum", "dash cam 4k",
-        "wireless backup camera", "jump starter power bank", "portable tire inflator",
+        "car ambient light", "electric air duster", "dash cam 4k",
+        "wireless backup camera", "jump starter power bank",
     ],
     "tools_diy": [
         "electric precision screwdriver", "mini electric screwdriver", "pinecil", "mini soldering iron",
@@ -63,6 +63,7 @@ STAPLE_KEYWORDS: dict[str, list[str]] = {
         "3 in 1 wireless charger",
     ],
     "electronics": ["wireless earbuds", "anc earbuds"],
+    "car": ["portable tire inflator", "mini car vacuum"],
     "desk_office": ["desk setup gadgets", "monitor light bar"],
 }
 
